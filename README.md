@@ -27,7 +27,7 @@ A Python-based tool that monitors PS4 kernel logs (klog) in real-time and automa
 
 1. **Clone the repository:**
 ```bash
-git clone https://github.com/yourusername/ps4-crash-logger.git
+git clone https://github.com/Mr8lu3/python-ps4-kernal-logger.git
 cd ps4-crash-logger
 ```
 
