@@ -9,6 +9,7 @@ import os
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 print("PS4 Crash Logger Starting...")
@@ -18,7 +19,7 @@ CONFIG_FILE = "ps4_ips.json"
 PS4_PORT = 3232
 LOG_DIR = "crash_logs"
 BUFFER_SIZE = 8192
-VERBOSE_MODE = False  # Set to True to see all klog messages, False for crashes only
+VERBOSE_MODE = True  # Set to True to see all klog messages, False for crashes only
 
 # Crash-related keywords to filter
 CRASH_KEYWORDS = [
@@ -137,10 +138,16 @@ class PS4CrashLogger:
         self.log_dir = Path(log_dir)
         self.sock = None
         self.current_crash_buffer = []
-        self.crash_context_lines = 10  # Lines before/after crash to capture
+        self.crash_context_lines = 30  # Increased to capture more context
         self.line_buffer = []
-        self.message_count = 0  # Track messages received
+        self.message_count = 0
         self.last_heartbeat = datetime.datetime.now()
+        
+        # Crash sequence tracking
+        self.in_crash_sequence = False
+        self.crash_start_time = None
+        self.crash_sequence_timeout = 2.0  # Wait 2 seconds after last crash line
+        self.crash_buffer = []
         
         # Create log directory if it doesn't exist
         self.log_dir.mkdir(exist_ok=True)
@@ -149,9 +156,11 @@ class PS4CrashLogger:
         """Connect to PS4 klog socket"""
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(5)
+            self.sock.settimeout(5)  # Longer timeout for connection
             print(f"\n[*] Connecting to PS4 at {self.ip}:{self.port}...")
             self.sock.connect((self.ip, self.port))
+            # After connection, use shorter timeout for receiving
+            self.sock.settimeout(1)
             print(f"[+] Connected successfully!")
             return True
         except socket.timeout:
@@ -168,6 +177,18 @@ class PS4CrashLogger:
         """Check if a line contains crash-related keywords"""
         line_lower = line.lower()
         return any(keyword.decode().lower() in line_lower for keyword in CRASH_KEYWORDS)
+    
+    def is_crash_start(self, line):
+        """Check if this is the actual start of a crash dump"""
+        stripped = line.strip()
+        return "A user thread receives a fatal signal" in stripped or stripped.startswith("# signal:")
+    
+    def is_crash_end_marker(self, line):
+        """Check if this line marks the end of a crash dump (dynamic libraries section ends)"""
+        stripped = line.strip()
+        # End when we see system messages after the crash dump
+        return (not stripped.startswith("#") and 
+                any(marker in stripped for marker in ["[Syscore App]", "[SceLncService]", "[Crash Reporter]"]))
     
     def save_crash_log(self, crash_data):
         """Save crash data to a timestamped file"""
@@ -189,6 +210,20 @@ class PS4CrashLogger:
             print(f"[-] Error saving crash log: {e}")
             return None
     
+    def check_crash_sequence_timeout(self):
+        """Check if crash sequence has timed out and should be saved"""
+        if self.in_crash_sequence and self.crash_start_time:
+            elapsed = time.time() - self.crash_start_time
+            if elapsed >= self.crash_sequence_timeout:
+                # Save the complete crash sequence
+                print(f"[!] Complete crash sequence captured ({len(self.crash_buffer)} lines)")
+                self.save_crash_log(self.crash_buffer)
+                
+                # Reset crash tracking
+                self.in_crash_sequence = False
+                self.crash_buffer = []
+                self.crash_start_time = None
+    
     def process_data(self, data):
         """Process incoming klog data and detect crashes"""
         try:
@@ -206,23 +241,50 @@ class PS4CrashLogger:
                 if VERBOSE_MODE:
                     print(f"[{self.message_count}] {line.strip()}")
                 
-                # Add to circular buffer for context
+                # Add to circular buffer for context (lines before crash)
                 self.line_buffer.append(line + '\n')
-                if len(self.line_buffer) > self.crash_context_lines * 2:
+                if len(self.line_buffer) > self.crash_context_lines:
                     self.line_buffer.pop(0)
                 
                 # Check if this line indicates a crash
                 if self.is_crash_line(line):
-                    print(f"\n[!] CRASH DETECTED: {line.strip()}")
-                    
-                    # Collect context (lines before and after)
-                    crash_context = self.line_buffer.copy()
-                    
-                    # Save immediately
-                    self.save_crash_log(crash_context)
-                    
-                    # Clear buffer to avoid duplicate saves
-                    self.line_buffer = []
+                    if not self.in_crash_sequence:
+                        # Check if this is the actual crash start marker
+                        if self.is_crash_start(line):
+                            # Start of new crash sequence
+                            print(f"\n[!] CRASH DETECTED - Capturing crash dump...")
+                            self.in_crash_sequence = True
+                            self.crash_start_time = time.time()
+                            
+                            # Start fresh - only include crash data
+                            self.crash_buffer = ["#\n"]  # Add marker at start
+                            self.crash_buffer.append(line + '\n')
+                        # Ignore other crash keywords that aren't the actual start
+                    else:
+                        # Continue existing crash sequence
+                        if line + '\n' not in self.crash_buffer:
+                            self.crash_buffer.append(line + '\n')
+                        # Reset timeout since we got more crash data
+                        self.crash_start_time = time.time()
+                
+                elif self.in_crash_sequence:
+                    # We're in a crash sequence
+                    # Only capture lines that start with "#" (actual crash dump data)
+                    stripped = line.strip()
+                    if stripped.startswith("#"):
+                        if line + '\n' not in self.crash_buffer:
+                            self.crash_buffer.append(line + '\n')
+                        # Reset timeout on each new line
+                        self.crash_start_time = time.time()
+                    else:
+                        # Non-# line means crash dump ended, save immediately
+                        print(f"[!] Complete crash dump captured ({len(self.crash_buffer)} lines)")
+                        self.save_crash_log(self.crash_buffer)
+                        
+                        # Reset crash tracking
+                        self.in_crash_sequence = False
+                        self.crash_buffer = []
+                        self.crash_start_time = None
                     
         except Exception as e:
             print(f"[-] Error processing data: {e}")
@@ -245,6 +307,9 @@ class PS4CrashLogger:
                     
                     self.process_data(data)
                     
+                    # Check if crash sequence has timed out
+                    self.check_crash_sequence_timeout()
+                    
                     # Print heartbeat every 30 seconds if not in verbose mode
                     if not VERBOSE_MODE:
                         now = datetime.datetime.now()
@@ -254,6 +319,8 @@ class PS4CrashLogger:
                     
                 except socket.timeout:
                     # Timeout is expected, continue listening
+                    # But check for crash sequence timeout
+                    self.check_crash_sequence_timeout()
                     continue
                     
         except KeyboardInterrupt:
