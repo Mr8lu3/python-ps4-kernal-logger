@@ -19,7 +19,7 @@ CONFIG_FILE = "ps4_ips.json"
 PS4_PORT = 3232
 LOG_DIR = "crash_logs"
 BUFFER_SIZE = 8192
-VERBOSE_MODE = True  # Set to True to see all klog messages, False for crashes only
+VERBOSE_MODE = False  # Set to True to see all klog messages, False for crashes only
 
 # Crash-related keywords to filter
 CRASH_KEYWORDS = [
@@ -297,13 +297,41 @@ class PS4CrashLogger:
             print("[*] VERBOSE MODE: All klog messages will be displayed")
         print("[*] Press Ctrl+C to stop\n")
         
+        reconnect_attempts = 0
+        max_reconnect_attempts = 3
+        
         try:
             while True:
                 try:
                     data = self.sock.recv(BUFFER_SIZE)
                     if not data:
                         print("[-] Connection closed by PS4")
-                        break
+                        
+                        # Try to reconnect
+                        if reconnect_attempts < max_reconnect_attempts:
+                            reconnect_attempts += 1
+                            print(f"[*] Attempting to reconnect ({reconnect_attempts}/{max_reconnect_attempts})...")
+                            self.sock.close()
+                            time.sleep(2)  # Wait before reconnecting
+                            
+                            if self.connect():
+                                print("[+] Reconnected successfully!")
+                                reconnect_attempts = 0  # Reset counter on success
+                                continue
+                            else:
+                                print(f"[-] Reconnection attempt {reconnect_attempts} failed")
+                                continue
+                        else:
+                            print("[-] Max reconnection attempts reached")
+                            print("[!] Try these steps:")
+                            print("    1. Restart the PS4 (full reboot, not rest mode)")
+                            print("    2. Make sure klog is enabled in GoldHEN settings")
+                            print("    3. Check no other program is connected to klog (close PuTTY, etc.)")
+                            print("    4. Run this script again")
+                            break
+                    
+                    # Reset reconnect counter on successful data receive
+                    reconnect_attempts = 0
                     
                     self.process_data(data)
                     
@@ -322,6 +350,18 @@ class PS4CrashLogger:
                     # But check for crash sequence timeout
                     self.check_crash_sequence_timeout()
                     continue
+                except socket.error as e:
+                    print(f"[-] Socket error: {e}")
+                    if reconnect_attempts < max_reconnect_attempts:
+                        reconnect_attempts += 1
+                        print(f"[*] Attempting to reconnect ({reconnect_attempts}/{max_reconnect_attempts})...")
+                        self.sock.close()
+                        time.sleep(2)
+                        if self.connect():
+                            print("[+] Reconnected successfully!")
+                            reconnect_attempts = 0
+                            continue
+                    break
                     
         except KeyboardInterrupt:
             print(f"\n[*] Stopping crash logger... (Total messages: {self.message_count})")
