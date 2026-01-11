@@ -106,31 +106,32 @@ Crash logs are saved with timestamps: `crash_YYYYMMDD_HHMMSS.log`
 Each log contains:
 ```
 ================================================================================
-PS4 CRASH REPORT - 2025-12-10 23:10:03
-PS4 IP: 192.168.1.150
+PS4 CRASH REPORT - 2026-01-10 23:26:33
 ================================================================================
 
-# signal: 10 (SIGBUS)
-# thread ID: 100926
+#
+# A user thread receives a fatal signal
+# signal: 11 (SIGSEGV)
+# thread ID: 101144
 # thread name: eboot.bin
-# proc ID: 78
+# proc ID: 445
 # proc name: eboot.bin
-# reason: general protection fault
-
+# reason: page fault (user read data, page not present)
+# fault address: 00000000000002cf
 # registers:
-# rax: 0000000003384660  rbx: 000000026c61cab8
-# rcx: 0000000000000000  rdx: 0000000000000000
-...
-
+# rax: 00000000000002ce  rbx: 0000000228c01468
+# rcx: 00000000000002ce  rdx: 0000000000000000
+# rsi: 0000000000000000  rdi: 000000000004113e
+# rbp: 00000007eeff6fb0  rsp: 00000007eeff6f98
+# r8 : 0000000000000001  r9 : 0000000004212c38
+# r10: 00000000000002cf  r11: 00000000ffffffff
+# r12: 00000012a066bfff  r13: 0000000000000001
+# r14: 00000012a0ac1130  r15: 0000000229120cd0
+# rip: 000000000221af56  eflags: 00010202
+# BrF: 000000080081cbc8  BrT: 000000000221af40
 # backtrace:
-# 0x000000000282BF0E </app0/eboot.bin> + 0x242BF0E
-# 0x000000000226C467 </app0/eboot.bin> + 0x1E6C467
-...
 
-# dynamic libraries:
-# /app0/eboot.bin
-# /Pa0WVI44qW/common/lib/libkernel.sprx
-...
+================================================================================
 ```
 
 ## Troubleshooting
